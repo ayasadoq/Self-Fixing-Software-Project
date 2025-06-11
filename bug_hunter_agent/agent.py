@@ -3,12 +3,13 @@
 import os
 import subprocess
 import json
-from google.adk.agents import Agent
+from google.adk.agents import tool
 # NO LONGER NEEDED: from google.adk.agents import tool # REMOVE THIS LINE
 
 # --- Tool Definition: bug_hunter_scan_code ---
-# The @tool decorator is REMOVED from here.
-def bug_hunter_scan_code() -> dict: # This line stays the same, just the decorator above it is removed
+@tool
+
+def bug_hunter_scan_code() -> dict: 
     """
     Scans the 'target_codebase' directory for code quality issues and potential bugs
     using pylint and flake8.
@@ -119,18 +120,3 @@ def bug_hunter_scan_code() -> dict: # This line stays the same, just the decorat
         print("Bug Hunter: Scan complete. No issues found.")
         return {"status": "success", "issues_found": False, "issues": []}
 
-# --- Agent Definition ---
-root_agent = Agent(
-    name="Bug_Hunter_Agent",
-    model="gemini-2.0-flash",
-    description=(
-        "An AI agent specialized in scanning Python code for quality issues, "
-        "potential bugs, and style violations using static analysis tools like Pylint and Flake8."
-    ),
-    instruction=(
-        "You are a dedicated Bug Hunter. Your primary task is to receive a request "
-        "to scan a codebase and use your 'bug_hunter_scan_code' tool. "
-        "Report all findings clearly, indicating if issues were found or if the code is clean."
-    ),
-    tools=[bug_hunter_scan_code], # This line remains unchanged; the function itself is the tool.
-)

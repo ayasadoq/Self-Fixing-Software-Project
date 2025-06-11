@@ -4,7 +4,7 @@ import os
 import subprocess
 import shutil # For copying files if needed, not directly used in this version but useful for file ops
 import datetime
-from google.adk.agents import Agent
+from google.adk.agents import tool
 
 # --- Helper Function for Applying Simple Fixes ---
 def apply_simple_fix(file_path: str, line_num: int, original_line: str, issue_symbol: str) -> str:
@@ -200,20 +200,3 @@ def auto_pr_creator_process_issues(issues_report: dict) -> dict:
         os.chdir(os.path.dirname(__file__))
 
 
-# --- Agent Definition ---
-# This defines your Auto-PR Creator agent within the ADK framework.
-root_agent = Agent(
-    name="Auto_PR_Creator_Agent", # Unique name for your agent
-    model="gemini-2.0-flash",
-    description=(
-        "An AI agent that receives bug reports, attempts to apply simple code fixes, "
-        "and automates the Git workflow (branching, committing, pushing) for creating pull requests."
-    ),
-    instruction=(
-        "You are an Auto-PR Creator. Your role is to take a structured list of issues, "
-        "apply automated fixes, and then manage the Git repository to create a new branch, "
-        "commit the changes, and push them. "
-        "When given a report of issues, always call the 'auto_pr_creator_process_issues' tool."
-    ),
-    tools=[auto_pr_creator_process_issues], # Register the tool function
-)
