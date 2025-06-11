@@ -3,107 +3,129 @@
 import os
 import subprocess
 import datetime
+from typing import Dict, List, Any
 from google.adk.agents import Agent
+from .doc_generator import DocumentationGenerator
 
 # --- Tool Definition: docs_updater_update_changelog ---
-# Use the @tool decorator for tools exposed to the LLM
 def docs_updater_update_changelog(last_n_commits: int = 5) -> dict:
     """
     Retrieves the last N Git commit messages from the project's root,
-    extracts relevant changes, and updates a CHANGELOG.md file.
+    extracts relevant changes, and updates documentation files.
 
     Args:
         last_n_commits (int): The number of recent commits to analyze.
 
     Returns:
-        dict: Status of the changelog update and any issues encountered.
+        dict: Status of the documentation updates and any issues encountered.
     """
-    changelog_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'CHANGELOG.md'))
-    repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..')) # Your_project_root
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    doc_generator = DocumentationGenerator(project_root)
 
-    print(f"Docs Updater: Updating changelog at '{changelog_path}' from repository '{repo_path}'...")
+    print(f"Docs Updater: Updating documentation from repository '{project_root}'...")
 
     try:
         # Change directory to the repository root to run git commands
         original_dir = os.getcwd()
-        os.chdir(repo_path)
+        os.chdir(project_root)
 
-        # Get the last N commit logs (formatted as short hash, author, date, subject)
-        # --no-merges to avoid merge commits which often just duplicate messages
+        # Get the last N commit logs
         git_log_command = ["git", "log", f"-n{last_n_commits}", "--pretty=format:%h|%an|%ad|%s", "--date=short", "--no-merges"]
         git_log_result = subprocess.run(
             git_log_command,
             capture_output=True,
             text=True,
-            check=True # Raise an error if git command fails
+            check=True
         )
         commit_lines = git_log_result.stdout.strip().split('\n')
 
-        changelog_entries = []
+        # Process commits and categorize changes
+        changes = {
+            "features": [],
+            "fixes": [],
+            "docs": [],
+            "other": []
+        }
+
         for line in commit_lines:
             if not line:
                 continue
-            parts = line.split('|', 3) # Split into hash, author, date, subject
+            parts = line.split('|', 3)
             if len(parts) == 4:
                 commit_hash, author, date, subject = parts
-                # Simple parsing for conventional commits or general changes
                 if subject.lower().startswith("feat:"):
-                    entry_type = "Features"
-                    message = subject[5:].strip()
+                    changes["features"].append(f"- {subject[5:].strip()} (_{author}, {date}_)")
                 elif subject.lower().startswith("fix:"):
-                    entry_type = "Bug Fixes"
-                    message = subject[4:].strip()
+                    changes["fixes"].append(f"- {subject[4:].strip()} (_{author}, {date}_)")
                 elif subject.lower().startswith("docs:"):
-                    entry_type = "Documentation"
-                    message = subject[5:].strip()
+                    changes["docs"].append(f"- {subject[5:].strip()} (_{author}, {date}_)")
                 else:
-                    entry_type = "Other Changes"
-                    message = subject.strip()
+                    changes["other"].append(f"- {subject.strip()} (_{author}, {date}_)")
 
-                changelog_entries.append(f"- {message} (_{author}, {date}_)")
-            else:
-                print(f"Docs Updater: Warning - Could not parse commit line: {line}")
+        # Update various documentation files
+        results = {}
 
-
-        # Read existing changelog content if it exists
-        existing_content = ""
-        if os.path.exists(changelog_path):
-            with open(changelog_path, 'r', encoding='utf-8') as f:
-                existing_content = f.read()
-
-        new_changelog_content = ""
-        if not existing_content.strip().startswith("# Changelog"):
-            new_changelog_content += "# Changelog\n\n"
-
-        # Add a new section for today's updates (or append to latest if date matches)
+        # 1. Update CHANGELOG.md
+        changelog_path = os.path.join(project_root, 'CHANGELOG.md')
         today_date = datetime.date.today().strftime('%Y-%m-%d')
-        # Check if a section for today already exists in the existing content
-        if f"## {today_date}" not in existing_content:
-            new_changelog_content += f"## {today_date}\n"
-            for entry in changelog_entries:
-                new_changelog_content += f"{entry}\n"
-            new_changelog_content += "\n" # Add a newline after the new section
-        else:
-            # If section exists, try to append to it. This is simplistic.
-            # A robust solution would parse markdown and insert.
-            # For now, we'll overwrite the section for simplicity or prepend to the file.
-            print("Docs Updater: Note - Changelog section for today already exists. Appending to top.")
-            # Simple prepend for demonstration. For real world, merge content.
-            new_changelog_content += f"## {today_date}\n"
-            for entry in changelog_entries:
-                new_changelog_content += f"{entry}\n"
-            new_changelog_content += "\n" + existing_content # Prepend new content
+        
+        changelog_content = f"## {today_date}\n\n"
+        for category, entries in changes.items():
+            if entries:
+                changelog_content += f"### {category.title()}\n"
+                changelog_content += '\n'.join(entries) + '\n\n'
 
+        with open(changelog_path, 'a', encoding='utf-8') as f:
+            f.write(changelog_content)
+        results['changelog'] = changelog_path
 
-        with open(changelog_path, 'w', encoding='utf-8') as f:
-            f.write(new_changelog_content)
+        # 2. Update README.md
+        readme_content = doc_generator.update_readme(changes)
+        results['readme'] = 'README.md'
 
-        print(f"Docs Updater: CHANGELOG.md updated successfully with {len(changelog_entries)} entries.")
+        # 3. Generate API Documentation
+        api_docs_dir = os.path.join(project_root, 'docs', 'api')
+        os.makedirs(api_docs_dir, exist_ok=True)
+
+        # Find all Python files in the project
+        for root, _, files in os.walk(project_root):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, project_root)
+                    api_doc = doc_generator.generate_api_docs(file_path)
+                    
+                    if api_doc:
+                        doc_path = os.path.join(api_docs_dir, f"{rel_path}.md")
+                        os.makedirs(os.path.dirname(doc_path), exist_ok=True)
+                        with open(doc_path, 'w', encoding='utf-8') as f:
+                            f.write(api_doc)
+                        results[f'api_doc_{rel_path}'] = doc_path
+
+        # 4. Enhance Code Comments
+        for root, _, files in os.walk(project_root):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    if doc_generator.enhance_code_comments(file_path):
+                        results[f'enhanced_comments_{file}'] = file_path
+
+        # 5. Generate Architecture Documentation
+        arch_doc = doc_generator.generate_architecture_doc()
+        if arch_doc:
+            results['architecture'] = 'ARCHITECTURE.md'
+
+        # 6. Generate Release Notes
+        version = datetime.date.today().strftime('%Y.%m.%d')
+        release_notes = doc_generator.generate_release_notes(version, changes)
+        if release_notes:
+            results['release_notes'] = 'RELEASE_NOTES.md'
+
+        print(f"Docs Updater: Documentation updated successfully.")
         return {
             "status": "success",
-            "message": f"CHANGELOG.md updated successfully with {len(changelog_entries)} entries.",
-            "updated_file": "CHANGELOG.md",
-            "entries_added": changelog_entries
+            "message": "Documentation updated successfully",
+            "updated_files": results
         }
 
     except FileNotFoundError:
@@ -114,9 +136,8 @@ def docs_updater_update_changelog(last_n_commits: int = 5) -> dict:
     except subprocess.CalledProcessError as e:
         return {"status": "error", "message": f"Git command failed: {e.cmd}, Output: {e.stderr}", "details": e.stdout}
     except Exception as e:
-        return {"status": "error", "message": f"An unexpected error occurred during changelog update: {e}"}
+        return {"status": "error", "message": f"An unexpected error occurred during documentation update: {e}"}
     finally:
-        # Change back to the original directory of the agent
         os.chdir(original_dir)
 
 

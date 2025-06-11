@@ -4,54 +4,197 @@ import os
 import subprocess
 import shutil # For copying files if needed, not directly used in this version but useful for file ops
 import datetime
+import ast
+import re
+from typing import List, Dict, Any, Optional
+from pathlib import Path
+import black
+import isort
 from google.adk.agents import Agent
+from google.generativeai import GenerativeModel
+from .github_integration import create_pull_request
 
-# --- Helper Function for Applying Simple Fixes ---
-def apply_simple_fix(file_path: str, line_num: int, original_line: str, issue_symbol: str) -> str:
+# --- Helper Functions for Advanced Fixes ---
+
+def format_with_black(file_path: str) -> bool:
     """
-    Applies a simple, rule-based fix to a specific line based on the issue type.
-    This is a very basic implementation. More complex fixes would require AST manipulation
-    or an LLM's understanding.
+    Format a Python file using Black.
+    Returns True if changes were made, False otherwise.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Get the current Black configuration
+        mode = black.Mode()
+        
+        # Format the content
+        formatted_content = black.format_str(content, mode=mode)
+        
+        # Check if changes were made
+        if formatted_content != content:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(formatted_content)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error formatting with Black: {e}")
+        return False
+
+def sort_imports(file_path: str) -> bool:
+    """
+    Sort imports in a Python file using isort.
+    Returns True if changes were made, False otherwise.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Get the current isort configuration
+        config = isort.Config()
+        
+        # Sort the imports
+        sorted_content = isort.code(content, config=config)
+        
+        # Check if changes were made
+        if sorted_content != content:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(sorted_content)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error sorting imports: {e}")
+        return False
+
+def generate_docstring(node: ast.AST, file_content: str) -> str:
+    """
+    Generate a docstring for a function or class using Google's Gemini model.
+    """
+    try:
+        # Initialize Gemini model
+        model = GenerativeModel('gemini-pro')
+        
+        # Extract context from the file
+        context = extract_context(node, file_content)
+        
+        # Generate docstring using Gemini
+        prompt = f"""Generate a Google-style docstring for this Python code:
+        
+        {context}
+        
+        The docstring should:
+        1. Start with a one-line summary
+        2. Include Args, Returns, and Raises sections if applicable
+        3. Follow Google's docstring style guide
+        """
+        
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"Error generating docstring: {e}")
+        return ""
+
+def extract_context(node: ast.AST, file_content: str) -> str:
+    """
+    Extract relevant context from the file for docstring generation.
+    """
+    try:
+        # Get the line numbers for the node
+        start_line = node.lineno
+        end_line = node.end_lineno if hasattr(node, 'end_lineno') else start_line
+        
+        # Get the lines from the file
+        lines = file_content.split('\n')
+        context_lines = lines[start_line-1:end_line]
+        
+        return '\n'.join(context_lines)
+    except Exception as e:
+        print(f"Error extracting context: {e}")
+        return ""
+
+def fix_indentation(file_path: str, line_num: int, issue_symbol: str) -> Optional[str]:
+    """
+    Fix indentation issues in a Python file.
+    Returns the fixed line or None if no fix was applied.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        if not 1 <= line_num <= len(lines):
+            return None
+        
+        line = lines[line_num - 1]
+        
+        # Handle different indentation issues
+        if issue_symbol == "E111":  # indentation is not a multiple of four
+            # Count current indentation
+            indent = len(line) - len(line.lstrip())
+            # Round to nearest multiple of 4
+            new_indent = (indent + 2) // 4 * 4
+            return ' ' * new_indent + line.lstrip()
+        
+        elif issue_symbol == "E114":  # indentation is not a multiple of four (comment)
+            # Similar to E111 but for comment lines
+            indent = len(line) - len(line.lstrip())
+            new_indent = (indent + 2) // 4 * 4
+            return ' ' * new_indent + line.lstrip()
+        
+        elif issue_symbol == "E117":  # over-indented
+            # Reduce indentation by 4 spaces
+            return line[4:] if line.startswith('    ') else line
+        
+        return None
+    except Exception as e:
+        print(f"Error fixing indentation: {e}")
+        return None
+
+def apply_sophisticated_fix(file_path: str, line_num: int, original_line: str, issue_symbol: str, file_content: str) -> str:
+    """
+    Applies sophisticated fixes to code issues using various tools and techniques.
     """
     fixed_line = original_line
-
-    # Example: Fix for trailing whitespace (Flake8 W291, Pylint C0303)
+    
+    # Handle trailing whitespace
     if "W291" in issue_symbol or "C0303" in issue_symbol:
-        fixed_line = original_line.rstrip() # Remove trailing whitespace
-
-    # Example: Fix for missing new line at end of file (Flake8 W292)
-    # This is harder to fix line by line, typically handled by adding a new line
-    # when writing the entire file, but for a single line context, we'll ignore it here.
-
-    # Example: Fix for missing docstring (Pylint C0114, C0115, C0116) - simplistic
-    # For simplicity, we won't auto-generate docstrings here. It requires deeper context.
-
-    # Example: Fix for bad indentation (Flake8 E111, E114, E117)
-    # This requires knowing the correct indentation level, which is complex.
-    # We will add a placeholder for now.
-    if issue_symbol.startswith("E11"): # Flake8 indentation errors
-         # This is a placeholder. Real fix needs context.
-         # For example, if it's an 'unexpected indentation', we might try to unindent.
-         # This would need to be very carefully designed.
-         pass # Will be handled by isort/black typically
-
-    # Return the (potentially) fixed line. If no fix applied, it's the original line.
+        fixed_line = original_line.rstrip()
+    
+    # Handle missing newline at end of file
+    elif "W292" in issue_symbol:
+        if not original_line.endswith('\n'):
+            fixed_line = original_line + '\n'
+    
+    # Handle docstring issues
+    elif any(x in issue_symbol for x in ["C0114", "C0115", "C0116"]):
+        try:
+            # Parse the file to get the AST
+            tree = ast.parse(file_content)
+            
+            # Find the node at the current line
+            for node in ast.walk(tree):
+                if hasattr(node, 'lineno') and node.lineno == line_num:
+                    if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+                        docstring = generate_docstring(node, file_content)
+                        if docstring:
+                            # Insert the docstring after the definition line
+                            return original_line + '\n' + '    ' + '"""' + docstring + '"""\n'
+        except Exception as e:
+            print(f"Error handling docstring: {e}")
+    
+    # Handle indentation issues
+    elif issue_symbol.startswith("E11"):
+        fixed_indentation = fix_indentation(file_path, line_num, issue_symbol)
+        if fixed_indentation:
+            fixed_line = fixed_indentation
+    
     return fixed_line
-
 
 # --- Tool Definition: auto_pr_creator_process_issues ---
 
 def auto_pr_creator_process_issues(issues_report: dict) -> dict:
     """
-    Receives a report of issues from the Bug Hunter, attempts to apply simple fixes,
+    Receives a report of issues from the Bug Hunter, applies sophisticated fixes,
     and prepares a Git commit/branch for a pull request.
-
-    Args:
-        issues_report (dict): A dictionary containing 'issues_found' (bool) and
-                              'issues' (list of dicts) from the Bug Hunter agent.
-
-    Returns:
-        dict: Status of the fix attempt and Git operations, and details of changes.
     """
     if not issues_report.get("issues_found", False):
         print("Auto-PR Creator: No issues reported by Bug Hunter. No action needed.")
@@ -72,7 +215,6 @@ def auto_pr_creator_process_issues(issues_report: dict) -> dict:
     for issue in issues:
         file_name = issue.get("file")
         if file_name:
-            # Reconstruct full path for the file in target_codebase
             full_file_path = os.path.join(target_codebase_path, file_name)
             if full_file_path not in issues_by_file:
                 issues_by_file[full_file_path] = []
@@ -83,24 +225,36 @@ def auto_pr_creator_process_issues(issues_report: dict) -> dict:
             print(f"Warning: File not found for issues: {file_path}")
             continue
 
-        lines = []
+        # Read the entire file content for context
         with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines() # Keep newline characters
+            file_content = f.read()
+            lines = file_content.splitlines(True)
 
         file_changed = False
-        new_lines = list(lines) # Create a mutable copy to modify
+        new_lines = list(lines)
 
-        # Sort issues by line number in descending order to avoid index shifting problems
-        # when modifying lines (modifying higher lines first is safer)
+        # First, try to fix issues that require full file context
+        if any(issue.get("symbol", "").startswith("C01") for issue in file_issues):
+            # Format the entire file with Black
+            if format_with_black(file_path):
+                file_changed = True
+                print(f"  Applied Black formatting to {file_path}")
+
+            # Sort imports
+            if sort_imports(file_path):
+                file_changed = True
+                print(f"  Sorted imports in {file_path}")
+
+        # Then handle individual line issues
         file_issues.sort(key=lambda x: x.get('line', 0), reverse=True)
-
         for issue in file_issues:
             line_num = issue.get("line")
             if isinstance(line_num, int) and 1 <= line_num <= len(lines):
-                original_line_index = line_num - 1 # Convert to 0-based index
+                original_line_index = line_num - 1
                 original_line_content = new_lines[original_line_index]
-                fixed_line_content = apply_simple_fix(
-                    file_path, line_num, original_line_content, issue.get("symbol", "")
+                fixed_line_content = apply_sophisticated_fix(
+                    file_path, line_num, original_line_content,
+                    issue.get("symbol", ""), file_content
                 )
 
                 if fixed_line_content != original_line_content:
@@ -110,28 +264,18 @@ def auto_pr_creator_process_issues(issues_report: dict) -> dict:
                     if file_path not in changes_made:
                         changes_made[file_path] = []
                     changes_made[file_path].append(f"Fixed {issue.get('symbol')} on line {line_num}: {issue.get('message')}")
-                else:
-                    print(f"  No fix applied for {issue.get('symbol')} on line {line_num} in {file_path} (or fix was identical).")
-            else:
-                print(f"  Warning: Invalid line number {line_num} for issue {issue.get('symbol')} in {file_path}")
 
         if file_changed:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
             print(f"  Changes written to {file_path}")
-        else:
-            print(f"  No changes needed for {file_path} based on simple fixes.")
-
 
     if not changes_made:
         return {"status": "success", "message": "No fixable issues found or fixes were identical to original code."}
 
-    # --- Git Operations Simulation (for now) ---
-    # In a real scenario, you'd use GitPython or subprocess to run Git commands.
-    # For this step, we'll just indicate what would happen.
-
-    print("Auto-PR Creator: Simulating Git operations...")
-    branch_name = f"auto-fix-{(datetime.datetime.now() + datetime.timedelta(hours=1)).strftime('%Y%m%d-%H%M%S')}" # Add 1 hour for local time
+    # --- Git Operations ---
+    print("Auto-PR Creator: Performing Git operations...")
+    branch_name = f"auto-fix-{(datetime.datetime.now() + datetime.timedelta(hours=1)).strftime('%Y%m%d-%H%M%S')}"
     commit_message = f"feat: Automated fixes for static analysis issues\n\n"
     for file_path, file_changes in changes_made.items():
         commit_message += f"File: {os.path.basename(file_path)}\n"
@@ -139,34 +283,26 @@ def auto_pr_creator_process_issues(issues_report: dict) -> dict:
             commit_message += f"  - {change_desc}\n"
     commit_message += "\nAutomated by Auto-PR Creator Agent."
 
-
-    # Placeholder for actual Git commands (to be implemented later with GitPython)
     try:
-        repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..')) # Your_project_root
-        os.chdir(repo_path) # Change current directory to repo root for git commands
+        repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        os.chdir(repo_path)
 
-        # git checkout -b <branch_name>
         subprocess.run(["git", "checkout", "-b", branch_name], check=True, capture_output=True, text=True)
         print(f"Auto-PR Creator: Created and switched to branch '{branch_name}'")
 
-        # git add . (add all changed files)
         subprocess.run(["git", "add", "."], check=True, capture_output=True, text=True)
         print("Auto-PR Creator: Staged all changes.")
 
-        # git commit -m "..."
         subprocess.run(["git", "commit", "-m", commit_message], check=True, capture_output=True, text=True)
         print("Auto-PR Creator: Committed changes.")
 
-        # git push origin <branch_name> (Will require authentication)
-        # This part will fail if you don't have credential helper set up or SSH keys.
-        # We'll handle authentication challenges later.
-        print(f"Auto-PR Creator: Attempting to push branch '{branch_name}' to origin. (May require authentication)")
         push_result = subprocess.run(
             ["git", "push", "origin", branch_name],
-            check=False, # Don't raise error on failed push due to auth
+            check=False,
             capture_output=True,
             text=True
         )
+
         if push_result.returncode != 0:
             print(f"Auto-PR Creator: Git push failed: {push_result.stderr}")
             return {
@@ -179,24 +315,36 @@ def auto_pr_creator_process_issues(issues_report: dict) -> dict:
             }
         else:
             print(f"Auto-PR Creator: Successfully pushed branch '{branch_name}'.")
-            return {
-                "status": "success",
-                "message": "Issues fixed, committed, and branch pushed.",
-                "branch_name": branch_name,
-                "commit_message": commit_message,
-                "changes_made": changes_made,
-                "pull_request_suggestion": f"Please create a Pull Request from '{branch_name}' on GitHub."
-            }
+            
+            # Create pull request using GitHub API
+            pr_result = create_pull_request(branch_name, changes_made, commit_message)
+            
+            if pr_result and pr_result["status"] == "success":
+                return {
+                    "status": "success",
+                    "message": "Issues fixed, committed, branch pushed, and PR created.",
+                    "branch_name": branch_name,
+                    "commit_message": commit_message,
+                    "changes_made": changes_made,
+                    "pull_request": pr_result
+                }
+            else:
+                return {
+                    "status": "partial_success",
+                    "message": "Issues fixed and branch pushed, but PR creation failed.",
+                    "branch_name": branch_name,
+                    "commit_message": commit_message,
+                    "changes_made": changes_made,
+                    "pull_request_error": pr_result.get("message") if pr_result else "GitHub API not configured"
+                }
 
     except subprocess.CalledProcessError as e:
-        os.chdir(os.path.dirname(__file__)) # Change back to agent's directory
+        os.chdir(os.path.dirname(__file__))
         return {"status": "error", "message": f"Git command failed: {e.cmd}, Output: {e.stderr}", "details": changes_made}
     except Exception as e:
-        os.chdir(os.path.dirname(__file__)) # Change back to agent's directory
+        os.chdir(os.path.dirname(__file__))
         return {"status": "error", "message": f"An unexpected error occurred during Git operations: {e}", "details": changes_made}
     finally:
-        # Always change back to the original directory of the agent
-        # This is important for ADK to find other modules if needed
         os.chdir(os.path.dirname(__file__))
 
 
