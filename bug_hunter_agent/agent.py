@@ -3,11 +3,11 @@
 import os
 import subprocess
 import json
-from google.adk.agents import tool
+from google.adk.agents import Agent
 # NO LONGER NEEDED: from google.adk.agents import tool # REMOVE THIS LINE
 
 # --- Tool Definition: bug_hunter_scan_code ---
-@tool
+
 
 def bug_hunter_scan_code() -> dict: 
     """

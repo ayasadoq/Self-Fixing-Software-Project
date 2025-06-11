@@ -4,7 +4,7 @@ import os
 import subprocess
 import shutil # For copying files if needed, not directly used in this version but useful for file ops
 import datetime
-from google.adk.agents import tool
+from google.adk.agents import Agent
 
 # --- Helper Function for Applying Simple Fixes ---
 def apply_simple_fix(file_path: str, line_num: int, original_line: str, issue_symbol: str) -> str:
@@ -40,7 +40,7 @@ def apply_simple_fix(file_path: str, line_num: int, original_line: str, issue_sy
 
 
 # --- Tool Definition: auto_pr_creator_process_issues ---
-@tool # Use the @tool decorator for tools exposed to the LLM
+
 def auto_pr_creator_process_issues(issues_report: dict) -> dict:
     """
     Receives a report of issues from the Bug Hunter, attempts to apply simple fixes,

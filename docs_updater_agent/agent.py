@@ -3,10 +3,10 @@
 import os
 import subprocess
 import datetime
-from google.adk.agents import tool
+from google.adk.agents import Agent
 
 # --- Tool Definition: docs_updater_update_changelog ---
-@tool # Use the @tool decorator for tools exposed to the LLM
+# Use the @tool decorator for tools exposed to the LLM
 def docs_updater_update_changelog(last_n_commits: int = 5) -> dict:
     """
     Retrieves the last N Git commit messages from the project's root,
